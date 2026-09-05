@@ -1,0 +1,155 @@
+﻿<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PicoNote Mobil</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: white; margin: 0; padding: 16px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #334155; padding-bottom: 12px; }
+    h2 { color: #38bdf8; margin: 0; font-size: 1.4rem; }
+    .btn { background: #22c55e; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 0.9rem; }
+    .btn-danger { background: #ef4444; padding: 6px 10px; }
+    .note-card { background: #1e293b; border-radius: 8px; padding: 14px; margin-bottom: 14px; border: 1px solid #334155; }
+    .input-title { width: 100%; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; font-weight: bold; font-size: 1rem; margin-bottom: 8px; }
+    .input-body { width: 100%; background: #0f172a; border: 1px solid #334155; color: #cbd5e1; padding: 8px; border-radius: 4px; height: 90px; font-family: inherit; font-size: 0.95rem; resize: vertical; }
+    .card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+    #sync-badge { font-size: 0.75rem; padding: 4px 8px; border-radius: 12px; background: #334155; color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h2>PicoNote Mobil</h2>
+    <span id="sync-badge">Senkronize</span>
+    <button class="btn" onclick="addNote()">+ Yeni Not</button>
+  </div>
+
+  <div id="notes-container">Yükleniyor...</div>
+
+  <script>
+    let notes = [];
+    let lastNotesHash = '';
+    let autoSaveTimer = null;
+    let isEditing = false;
+
+    function getNotesHash(data) {
+      return JSON.stringify(data);
+    }
+
+    function updateBadge(status, color) {
+      const badge = document.getElementById('sync-badge');
+      badge.innerText = status;
+      badge.style.color = color || '#94a3b8';
+    }
+
+    async function loadNotes() {
+      if (isEditing) return; // Kullanıcı o an bir şey yazıyorsa içeriği ezme
+      try {
+        const res = await fetch('/piconote_backup.json');
+        if (!res.ok) return;
+        const fetched = await res.json();
+        const newHash = getNotesHash(fetched);
+        
+        // Sadece değişiklik varsa arayüzü güncelle
+        if (newHash !== lastNotesHash) {
+          notes = fetched;
+          lastNotesHash = newHash;
+          render();
+          updateBadge('Güncel', '#22c55e');
+        }
+      } catch (e) {}
+    }
+
+    function render() {
+      const container = document.getElementById('notes-container');
+      if (notes.length === 0) {
+        container.innerHTML = '<p style="color:#94a3b8; text-align:center;">Not bulunamadı. Yeni not ekleyebilirsiniz.</p>';
+        return;
+      }
+
+      container.innerHTML = notes.map((n, i) => `
+        <div class="note-card">
+          <input type="text" class="input-title" value="${escapeHtml(n.title)}" 
+            onfocus="isEditing=true" onblur="isEditing=false"
+            oninput="onInputChanged(${i}, 'title', this.value)" placeholder="Başlık...">
+          <textarea class="input-body" 
+            onfocus="isEditing=true" onblur="isEditing=false"
+            oninput="onInputChanged(${i}, 'body', this.value)" placeholder="Not içeriği...">${escapeHtml(stripHtml(n.body))}</textarea>
+          <div class="card-footer">
+            <button class="btn btn-danger" onclick="deleteNote(${i})">Sil</button>
+            <span style="font-size:0.75rem; color:#64748b;">ID: ${n.id.substring(0,8)}...</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function onInputChanged(index, field, val) {
+      notes[index][field] = val;
+      triggerAutoSave();
+    }
+
+    function triggerAutoSave() {
+      const currentHash = getNotesHash(notes);
+      if (currentHash === lastNotesHash) return; // Değişiklik yoksa kaydetme
+
+      updateBadge('Kaydediliyor...', '#eab308');
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = setTimeout(saveAll, 800); // Kullanıcı yazmayı bitirdikten 800ms sonra oto-kaydet
+    }
+
+    function addNote() {
+      notes.unshift({
+        id: 'mob-' + Math.random().toString(36).substr(2, 9),
+        title: 'Mobil Not',
+        body: 'Telefondan eklendi...'
+      });
+      render();
+      triggerAutoSave();
+    }
+
+    function deleteNote(index) {
+      notes.splice(index, 1);
+      render();
+      triggerAutoSave();
+    }
+
+    async function saveAll() {
+      const currentHash = getNotesHash(notes);
+      if (currentHash === lastNotesHash) {
+        updateBadge('Güncel', '#22c55e');
+        return;
+      }
+
+      try {
+        const res = await fetch('/piconote_backup.json', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(notes)
+        });
+        if (res.ok) {
+          lastNotesHash = currentHash;
+          updateBadge('Kaydedildi', '#22c55e');
+        } else {
+          updateBadge('Kayıt Hatası', '#ef4444');
+        }
+      } catch (e) {
+        updateBadge('Bağlantı Yok', '#ef4444');
+      }
+    }
+
+    function escapeHtml(str) {
+      return (str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function stripHtml(html) {
+      let tmp = document.createElement("DIV");
+      tmp.innerHTML = html || '';
+      return tmp.textContent || tmp.innerText || "";
+    }
+
+    loadNotes();
+    setInterval(loadNotes, 4000); // 4 saniyede bir bilgisayardan yeni not var mı kontrol et
+  </script>
+</body>
+</html>
